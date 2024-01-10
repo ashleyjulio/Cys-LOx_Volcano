@@ -1,0 +1,177 @@
+---
+title: "Volcano Plots"
+output: html_notebook
+---
+
+#Navigate to Box directory/directory containing data file 
+```{r}
+library(readxl)
+library(ggrepel)
+library(ggplot2)
+library(pacman)
+library(tidyverse)
+```
+
+Read in the datasheet as an excel file or csv with the output
+```{r}
+#change the file path to your dataset
+df.max<-your_imported_dataset_name 
+df.max<-df.max[-c(1:2),c(1:12,19,21,24)] #select the columns containing the all replicates of the two conditions to be compared, Uniprot IDs, protein names, and foldchange (from Perseus)
+
+df.max[df.max==NaN] <-NA #labels all zero values as "NA"
+#df.max <- na.omit(df.max) #remove "NA" values
+df.max<-as.data.frame(df.max) #ensures R knows you want this as a dataframe
+
+#keep rows with more than 1 unique value disregarding NA values
+grp1.unique<-apply(df.max, 1, function(row) length(unique(na.omit(row[1:6])))) #grp 1 columns
+grp2.unique<-apply(df.max, 1, function(row) length(unique(na.omit(row[7:12])))) #grp 2 columns
+df<-cbind(df.max,grp1.unique,grp2.unique)
+df<-df[which(df[,c(ncol(df)-1)] > 1 & df[,c(ncol(df)-1)] > 1), c(1:c(ncol(df)-2))]
+df.max<-df
+df.max<-as.data.frame(df.max)
+```
+
+
+Two tailed t-test:
+```{r}
+#Here you want to assign your group 1 & 2 as the the replicates for each condition
+
+#Determine variance
+vartest <- function(df.max, grp1, grp2) {
+x = as.numeric(df.max[grp1])
+y = as.numeric(df.max[grp2])
+results.max = var.test(x, y)
+results.max$p.value
+}
+varpvalue = apply(df.max, 1, vartest, grp1 = c(1:6), grp2 = c(7:12))
+
+#t-test for groups variance equal
+ttest <- function(df.max, grp1, grp2) {
+    x = as.numeric(df.max[grp1])
+    y = as.numeric(df.max[grp2])
+    results.max = t.test(x, y, var.equal = T)
+    results.max$p.value
+ }
+rawpvalue1 = apply(df.max, 1, ttest, grp1 = c(1:6), grp2 = c(7:12))
+
+##t-test for groups with variances unequal
+ttest2 <- function(df.max, grp2, grp1) {
+    x = as.numeric(df.max[grp2])
+    y = as.numeric(df.max[grp1])
+    results.max = t.test(x, y,var.equal = F) ##variances unequal
+    results.max$p.value}
+rawpvalue2 = apply(df.max, 1, ttest2, grp1 = c(1:6), grp2 = c(7:12))
+
+df.max[,c(1:12)]<-sapply(df.max[,c(1:12)], as.numeric)  ##convert to numeric
+control = apply(df.max[,c(1:6)], 1, mean) #calcualte mean within groups
+test = apply(df.max[,c(7:12)], 1, mean) #calcualte mean within groups
+```
+
+
+Calculate foldchange:
+
+Do we have a FC? If have t-test difference from Max QUant, run this following line.
+```{r}
+foldchange <- as.numeric(df.max[,13])
+```
+
+If don't have FC, can calculate manually by running the next three lines therfore, remove the "#"
+```{r}
+control.grp1 = apply(df.max[,c(7:12)], 1, mean) 
+test.grp1 = apply(df.max[,c(1:6)], 1, mean)
+foldchange <- control.grp1 - test.grp1
+foldchange<-as.numeric(foldchange)
+```
+
+Make a table for the plot:
+```{r}
+results.max = cbind(foldchange, rawpvalue1, rawpvalue2, varpvalue)
+results.max = as.data.frame(results.max)
+results.max$rawpvalue1[results.max$varpvalue < 0.05] <- NA  #keep the right p value, depending on variance calcuation
+results.max$rawpvalue2[results.max$varpvalue > 0.05] <- NA  #keep the right p value, depending on variance calcuation
+results.max$rawpvalue1<-apply(results.max[,2:3], 1, function(x) toString(na.omit(x)))  #keep the right p value
+results.max$rawpvalue1<-as.numeric(results.max$rawpvalue1) #make sure numeric
+results.max<-results.max[,1:2] #keep the right p value
+
+results.max$label <- as.character(df.max[,14]) #ProteinIDs, Uniprot
+results.max$name<-as.character(df.max[,15]) #ProteinNames column, abreviation
+results.max$foldchange<-as.numeric(results.max$foldchange)
+#results.max$rawpvalue1<-p.adjust(results.max$rawpvalue1,method="BH") #adjusted p value
+results.max$Category <- "NS"
+results.max$Category[results.max$foldchange > 1 & results.max$rawpvalue < 0.05] <- "UP"  
+    #Here you can change the foldchange cutoff values currently set to 1.5 and -1.5. Orther common cutoffs are 2, -2.
+results.max$Category[results.max$foldchange < -1  & results.max$rawpvalue < 0.05] <- "DOWN"
+
+#results.max[results.max==0] <-NA
+#results.max <- na.omit(results.max) #remove NA values
+```
+
+Label specific proteins:
+```{r}
+results.max<-as.data.frame(results.max) #make sure data frame
+results.max$name<-gsub("_HUMAN","",gsub("sp\\|","",results.max$name))
+
+#create a subplot. This is so you can selectively label indicated proteins on your volcano plot
+cols <- c("UP" = "#26b3ff", "DOWN" = "#d14a21", "NS" = "grey")
+
+#nups <- results.max %>%
+  #filter(name %in% c(""))
+
+sig_chol_genes <- results.max %>%
+  filter(name %in% c())
+#list the protein names here that you want labeled and make sure to specify the column they are in; in this case "name"
+test <- as.data.frame(sig_chol_genes)
+
+#up_chol_gene <- results.max %>%
+  #filter(results.max$name == c())
+
+#list the protein names here that you want circled in a black outline
+down_chol_gene <- results.max %>%
+  filter(name %in% c())
+```
+
+Make volcano plot:
+```{r}
+#genearte the volcano plot using 1*foldchange or -1*foldchange depending on how foldchange was calculated (you want treatment - control for plot) 
+volcano = ggplot(data = results.max, aes(x = 1*foldchange, y = -1*log10(rawpvalue1), label=name))
+p <- volcano +
+    #create subplot parameters
+  geom_point(aes(colour = Category), 
+             alpha = 0.8, 
+             shape = 16,
+             size = 3) + 
+  geom_point(data = as.data.frame(up_chol_gene),
+             alpha = 1, 
+             shape = 21,
+             size = 3, 
+             colour = "black",) + 
+  geom_point(data = down_chol_gene,
+             alpha = 1, 
+             shape = 21,
+             size = 3, 
+             colour = "black") +
+        geom_vline(xintercept=c(-1, 1), col="black", linetype = "dashed") +    ###change the dark green line here
+        geom_hline(yintercept=-log10(0.05), col="black", linetype = "dashed")+
+        
+        geom_label_repel(data = as.data.frame(sig_chol_genes), # Add labels last to appear as the top layer  
+                   aes(label = name),
+                   force = 2,
+                   nudge_y = 1) +    
+        scale_colour_manual(values = cols) +###can adjust the colors with hex codes or words
+
+        #theme(panel.background = element_rect(fill = "transparent", colour = "white"), plot.background = element_rect(fill = "transparent", colour = "white"))+
+        theme_classic(base_size = 20) +
+        labs(title= "", y=expression(-log[10](p)),x =expression(log[2](FC)))+     ###change the tile of the plot here
+        theme(legend.position = "right") 
+scale_x_continuous(breaks = c(seq(-2.6, 2.6, 1)), limits = c(-2.6, 2.6)) # Modify x-axis range and tick intervals 
+
+p
+
+ggsave("name_of_your_plot.png", width = 7, height = 7)   ##name the output plot here, it should show up in you working directory
+
+```
+
+```{r}
+ # If you want to save your results, run this chunk
+write.csv(results.max, file = "name_of_your_results_data.csv")
+```
